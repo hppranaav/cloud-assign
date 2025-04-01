@@ -38,7 +38,7 @@ class LoadBalancer:
         try:
             result = subprocess.run(["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
             containers = [c for c in result.stdout.splitlines() if "webapp" in c]
-            BACKENDS = [f"https://{c}:5000" for c in containers]
+            BACKENDS = [f"https://{c}:8080/watermark" for c in containers]
             
             for backend in list(self.backend_request_count.keys()):
                 if backend not in BACKENDS:
@@ -120,7 +120,7 @@ class LoadBalancer:
                     stats = stats_result.stdout.strip().split()
                     cpu_usage = stats[0].replace('%', '')
                     mem_usage = stats[1]
-                    container_stats[f"https://{container_name}:5000"] = (float(cpu_usage), mem_usage)
+                    container_stats[f"https://{container_name}:8080"] = (float(cpu_usage), mem_usage)
                     logging.info(f"Container {container_name}: CPU={cpu_usage}%, MEM={mem_usage}")
                 else:
                     logging.warning(f"Failed to get stats for container {container_name}: {stats_result.stderr}")
@@ -135,14 +135,24 @@ class LoadBalancer:
 
 lb = LoadBalancer()
 
-@app.get("/")
+@app.post("/route")
 async def load_balancer(request: Request):
-    policy = request.query_params.get("policy", "round_robin")
-    logging.info("Received request with policy: %s", policy)
     try:
+        form = await request.form()
+        policy = form.get("policy", "round_robin")
+        image = form.get("image")
+        watermark_size = form.get("size")
+        
+        if not image:
+            logging.error("No image provided in the request")
+            return {"error": "Image is required"}, 400
+        
+        logging.info("Received request with policy: %s and image", policy)
+        
         start_time = time.time()
         backend = lb.get_backend(policy)
-        response = requests.get(backend)
+        files = {"image": image.file}
+        response = requests.post(backend, data={'watermark-size': watermark_size}, files=files)
         latency = (time.time() - start_time) * 1000
         lb.latency_records.append(latency)
         if len(lb.latency_records) > 100:
@@ -155,16 +165,36 @@ async def load_balancer(request: Request):
         logging.info("Total requests handled: %d", lb.total_requests)
         logging.info("Requests sent to backends: %s", lb.backend_request_count)
         
-        return response.content
+        return response.content, response.status_code
     except Exception as e:
         lb.increment_failed_requests()
         lb.increment_dropped_requests()
         logging.error("Failed to forward request: %s", e)
-        return {"error": "Failed to forward request"}
-    
+        return {"error": "Failed to forward request"}, 500
+
+
+@app.get("/algo")
+async def get_algo():
+    logging.info("Fetching current rounting protocol")
+    return {"policy": lb.current_policy}, 200
+
+@app.get("/change")
+async def change_algo(request: Request):
+    logging.info("Changing routing policy")
+    policy = request.query_params.get("policy", "round_robin")
+    logging.info("Received request with policy: %s", policy)
+    try:
+        if lb.current_policy == policy:
+            logging.info("Policy already in effect")
+        else:
+            lb.current_policy = policy
+    except Exception as e:
+        logging.error("Unable to change routing policy: %s", e)
+        return {"error": "failed to change policy"}, 500
+
 
 @app.get("/metrics")
-async def get_metrics(request: Request):
+async def get_metrics():
     logging.info("Fetching metrics for load balancer")
     backend_metrics = {}
     container_stats = lb.get_all_container_stats()
@@ -191,8 +221,8 @@ async def get_metrics(request: Request):
     }
     
     logging.debug("Metrics data: %s", metrics)
-    return metrics
+    return metrics, 200
 
 if __name__ == "__main__":
     logging.info("Starting Load Balancer")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8100)
