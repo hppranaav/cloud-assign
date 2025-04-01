@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY load-balancer/load_balancer.py /app
 
-RUN pip install --no-cache-dir uvicorn fastapi requests psutil
+RUN pip install --no-cache-dir uvicorn fastapi requests psutil python-multipart
 
 EXPOSE 8100
 

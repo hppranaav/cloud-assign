@@ -4,7 +4,7 @@ This assignment deals with scaling a FaaS running on a container using a scaling
 ## Pre-requisites
 ### Building the webapp image
 To build the FaaS image, you run the following command from the root folder of this repository
-``` docker build -t webapp -f webapp/Dockerfile .```
+``` podman build -t webapp -f webapp/Dockerfile .```
 
 ### Load balancer
 
@@ -19,7 +19,18 @@ The scaling controller service however would need to be restarted in order to sw
 
 ## Experiments
 ### Caliberations
+#### Single Container Saturation
+Calculate/Observe the following metrics when load is generated on a single container in the network
+- latency
+- request throughput
+- memory usage
+- CPU utilization
+#### Multi-Container Saturation
+The same as the above but with multiple containers in the network and observe changes in metrics on increasing the number of containers
+#### Container spawn time
+Find the time required to spawn a new container through the scaling controller
 ### Benchmarking
+Run a variable load generator test to check validity of the entire system and observe the response time of the system and derive an SLA for the scenario with **0** failed requests. Things to mix and match are load balancing policies, scaling algorithms, new spawning methods for containers and trying to reduce oscilations.
 
 ## API Specification
 
@@ -35,7 +46,7 @@ The scaling controller service however would need to be restarted in order to sw
 - **Response**:
     - `200 OK`: Returns the current routing protocol (`round_robin` or `state_aware`).
 
-#### `POST /algo`
+#### `POST /change`
 - **Description**: Updates the routing protocol of the load balancer.
 - **Request Body**:
     ```json
@@ -46,6 +57,20 @@ The scaling controller service however would need to be restarted in order to sw
 - **Response**:
     - `200 OK`: Confirms the routing protocol has been updated.
     - `400 Bad Request`: Invalid or missing `algorithm` parameter.
+
+#### `POST /route`
+- **Description**: routes requests to backends to load balance.
+- **Request Body**:
+    ```json
+    {
+        "policy": "round_robin" | "state_aware",
+        "image": <path-to-image>,
+        "size": "small" | "medium" | "large"
+    }
+    ```
+- **Response**:
+    - `200 OK`: Confirms the request has been routed
+    - `400 Bad Request`: Invalid or missing parameters.
 
 ---
 

@@ -37,8 +37,12 @@ class LoadBalancer:
         global BACKENDS
         try:
             result = subprocess.run(["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
-            containers = [c for c in result.stdout.splitlines() if "webapp" in c]
-            BACKENDS = [f"https://{c}:8080/watermark" for c in containers]
+            if result.returncode != 0:
+                logging.error(f"Failed to get container list: {result.stderr}")
+                return
+            
+            containers = [c for c in result.stdout.strip().splitlines() if "webapp" in c]
+            BACKENDS = [f"http://{c}:8080/watermark" for c in containers]
             
             for backend in list(self.backend_request_count.keys()):
                 if backend not in BACKENDS:
@@ -92,11 +96,11 @@ class LoadBalancer:
         logging.warning(f"Request failed. Total failed requests: {self.failed_requests}")
 
     def calculate_error_rate(self):
-        if self.request_rate > 0:
-            return (self.failed_requests / self.request_rate) * 100
+        if self.total_requests > 0:
+            return (self.failed_requests / self.total_requests) * 100
         return 0
     
-    def get_all_container_stats():
+    def get_all_container_stats(self):
         try:
             result = subprocess.run(
                 ["podman", "ps", "--format", "{{.Names}}"],
@@ -188,6 +192,7 @@ async def change_algo(request: Request):
             logging.info("Policy already in effect")
         else:
             lb.current_policy = policy
+        return {"policy": lb.current_policy}, 200
     except Exception as e:
         logging.error("Unable to change routing policy: %s", e)
         return {"error": "failed to change policy"}, 500
