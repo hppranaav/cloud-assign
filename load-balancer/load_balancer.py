@@ -32,6 +32,7 @@ class LoadBalancer:
         self.latency_records = 0
         self.policy_switch_count = 0
         self.current_policy = "round_robin"
+        self.response_time_history = {}
         logging.info("Initializing LoadBalancer")
         self.get_gateway_ip()
         self.update_backends()
@@ -55,7 +56,6 @@ class LoadBalancer:
         except Exception as e:
             logging.error(f"Failed to get gateway IP: {e}")
 
-    
     def update_backends(self):
         global BACKENDS
         try:
@@ -96,18 +96,35 @@ class LoadBalancer:
 
     def state_aware(self):
         self.update_backends()
-        metrics = {}
+        DEFAULT_LATENCY = 0.2
+        metrics = []
         for backend in BACKENDS:
             try:
-                response = requests.get(f"{backend}/metrics", timeout=1)
-                metrics[backend] = response.json().get("cpu_usage", 100)
-                logging.info("Fetched metrics from %s: %s", backend, metrics[backend])
-            except requests.exceptions.RequestException as e:
-                metrics[backend] = 100
-                logging.warning("Failed to fetch metrics from %s: %s", backend, e)
-        selected_backend = min(metrics, key=metrics.get)
-        logging.info("Selected backend (state aware): %s", selected_backend)
-        return selected_backend
+                latencies = self.response_time_history.get(backend)
+                if latencies:
+                    avg_latency = sum(latencies) / len(latencies)
+                else:
+                    avg_latency = DEFAULT_LATENCY
+                    
+                logging.warning("No latency data yet for %s", backend)
+                                active_conn = self.backend_request_count.get(backend, 0)
+                metrics.append({
+                    "backend": backend,
+                    "avg_latency": avg_latency,
+                    "connections": active_conn
+                })
+                logging.info("Backend %s: avg_latency=%.4fs, active_conn=%d", backend, avg_latency, active_conn)
+            except Exception as e:
+                logging.error("Error processing backend %s: %s", backend, e)
+                continue
+        
+        if not metrics:
+            logging.error("No latency history for any backend")
+        return None
+
+        selected = sorted(metrics, key=lambda x: (x["avg_latency"], x["connections"]))[0]
+        logging.info("Selected backend (real-response latency-aware): %s", selected["backend"])
+        return selected["backend"]
 
     def get_backend(self, policy="round_robin"):
         if policy != self.current_policy:
@@ -191,23 +208,33 @@ async def load_balancer(data: str = Form(None), file: str = Form(None), output: 
             lb.increment_dropped_requests()
             return {"error": "No available backends"}, 503
         logging.info("Selected backend: %s", backend) # Remove this log when submitting
+
+        lb.backend_request_count[backend] += 1
         response = requests.post(backend, data=datadict, files=filedict)
+        latency = time.time() - start_time
 
         if response.status_code == 200:
             logging.info("Request forwarded successfully")
-            if output:
-                output_path = "/app/data/" + output
-                with open(output_path, "wb") as fh:
-                    fh.write(response.content)
-        
-        # lb.total_requests += 1
-        # lb.backend_request_count[backend] = lb.backend_request_count.get(backend, 0) + 1
+            lb.response_time_history.setdefault(backend, [])
+            lb.response_time_history[backend].append(latency)
+
+            MAX_SAMPLES = 10
+            if len(lb.response_time_history[backend]) > MAX_SAMPLES:
+                lb.response_time_history[backend].pop(0)
+            
+            # Kept to check validity of end user response - remove when submitting
+            # if output:
+            #     output_path = "/app/data/" + output
+            #     with open(output_path, "wb") as fh:
+            #         fh.write(response.content)
         
         # logging.info("Forwarded request to backend: %s", backend)
         # logging.info("Total requests handled: %d", lb.total_requests)
         # logging.info("Requests sent to backends: %s", lb.backend_request_count)
         
         return Response(content=response.content, media_type="application/octet-stream", status_code=response.status_code)
+    finally:
+        lb.backend_request_count[backend] -= 1
     except Exception as e:
         # lb.increment_failed_requests()
         # lb.increment_dropped_requests()
