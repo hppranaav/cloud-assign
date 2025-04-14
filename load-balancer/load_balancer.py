@@ -1,5 +1,5 @@
 import requests
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Response
 import uvicorn
 import subprocess
 import logging
@@ -37,12 +37,18 @@ class LoadBalancer:
     def update_backends(self):
         global BACKENDS
         try:
-            result = subprocess.run(["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
-            if result.returncode != 0:
-                logging.error(f"Failed to get container list: {result.stderr}")
+            logging.info("Updating backends")
+
+            result = requests.get("http://localhost:8300/containers")
+            if result.status_code != 200:
+                logging.error(f"Failed to get container list: {result.text}")
+                return
+
+            containers = result.json().get("containers", [])
+            if not containers:
+                logging.warning("No containers found")
                 return
             
-            containers = [c for c in result.stdout.strip().splitlines() if "webapp" in c]
             BACKENDS = [f"http://{c}:8080/watermark" for c in containers]
             
             for backend in list(self.backend_request_count.keys()):
@@ -143,22 +149,22 @@ lb = LoadBalancer()
 @app.post("/route")
 async def load_balancer(data: str = Form(None), file: str = Form(None), output: str = Form(None)):
     try:
-        datadict={'watermark-size': data}
 
         if not data or not file:
             logging.error("Missing required fields: data or file")
             return {"error": "Both 'data' and 'file' are required"}, 400
 
         filepath = "/app/data/" + file
+        datadict={'watermark-size': data}
+
         if not Path(filepath).is_file():
             logging.error("File does not exist: %s", file)
             return {"error": "File not found"}, 400
-        logging.info("File exists: %s", filepath)
+        logging.info("File exists: %s", filepath) # Remove this log when submitting
         filedict = {"image": Path(filepath).open("rb")}
         
         start_time = time.time()
         backend = lb.get_backend(policy)
-        backend = BACKENDS[0]
         if not backend:
             lb.increment_dropped_requests()
             return {"error": "No available backends"}, 503
@@ -179,7 +185,7 @@ async def load_balancer(data: str = Form(None), file: str = Form(None), output: 
         # logging.info("Total requests handled: %d", lb.total_requests)
         # logging.info("Requests sent to backends: %s", lb.backend_request_count)
         
-        return response.content, response.status_code
+        return Response(content=response.content, media_type="application/octet-stream", status_code=response.status_code)
     except Exception as e:
         # lb.increment_failed_requests()
         # lb.increment_dropped_requests()
@@ -208,35 +214,34 @@ async def change_algo(request: Request):
         return {"error": "failed to change policy"}, 500
 
 
-@app.get("/metrics")
-async def get_metrics():
-    logging.info("Fetching metrics for load balancer")
-    backend_metrics = {}
-    container_stats = lb.get_all_container_stats()
-    for backend in BACKENDS:
-        backend_metrics[backend] = {
-            "requests": lb.backend_request_count.get(backend, 0),
-            "status": "healthy",
-            "cpu_usage": container_stats.get(backend,(None, None))[0],
-            "memory_usage": container_stats.get(backend,(None, None))[1],
-            "error_rate": lb.calculate_error_rate(),
-        }
+# @app.get("/metrics")
+# async def get_metrics():
+#     logging.info("Fetching metrics for load balancer")
+#     backend_metrics = {}
+#     for backend in BACKENDS:
+#         backend_metrics[backend] = {
+#             "requests": lb.backend_request_count.get(backend, 0),
+#             "status": "healthy",
+#             "cpu_usage": container_stats.get(backend,(None, None))[0],
+#             "memory_usage": container_stats.get(backend,(None, None))[1],
+#             "error_rate": lb.calculate_error_rate(),
+#         }
     
-    metrics = {
-        "total_requests": lb.total_requests,
-        "active_connections": len(BACKENDS),
-        "average_latency": sum(lb.latency_records) / len(lb.latency_records) if lb.latency_records else 0,
-        "dropped_requests": lb.dropped_requests,
-        "error_rate": lb.calculate_error_rate(),
-        "cpu_usage": psutil.cpu_percent(),
-        "memory_usage": psutil.virtual_memory().percent,
-        "current_policy": lb.current_policy,
-        "policy_switch_count": lb.policy_switch_count,
-        "backend_metrics": backend_metrics,
-    }
+#     metrics = {
+#         "total_requests": lb.total_requests,
+#         "active_connections": len(BACKENDS),
+#         "average_latency": sum(lb.latency_records) / len(lb.latency_records) if lb.latency_records else 0,
+#         "dropped_requests": lb.dropped_requests,
+#         "error_rate": lb.calculate_error_rate(),
+#         "cpu_usage": psutil.cpu_percent(),
+#         "memory_usage": psutil.virtual_memory().percent,
+#         "current_policy": lb.current_policy,
+#         "policy_switch_count": lb.policy_switch_count,
+#         "backend_metrics": backend_metrics,
+#     }
     
-    logging.debug("Metrics data: %s", metrics)
-    return metrics, 200
+#     logging.debug("Metrics data: %s", metrics)
+#     return metrics, 200
 
 if __name__ == "__main__":
     logging.info("Starting Load Balancer")
