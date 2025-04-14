@@ -2,13 +2,27 @@
 This assignment deals with scaling a FaaS running on a container using a scaling controller service and a custom load balancer. The Load balancer has two routing protocols (round_robin and state_aware) and the scaling controller has two algorithms (regression and sliding window).
 
 ## Pre-requisites
-### Building the webapp image
+### Create a custom network
+- **NOTE**: Make sure all podman commands are run in the root user
+To Create a network, use the following command and substitute ```<network-name>``` with the name you want to give your network
+```podman network create <network-name>```
+### Building and runing the webapp image
 To build the FaaS image, you run the following command from the root folder of this repository
 ``` podman build -t webapp -f webapp/Dockerfile .```
+
+To run the webapp, run the below command
+```podman run -d --name <container-name> --network=<custom_network_name> -p 8081:8080 -v <watermarks_source_folder>:/app/data webapp```
+**Note**: If running on Red Hat based distributions, there is a small variation of the above command to be run which includes a ```:z``` while binding volumes
+```podman run -d --name <container-name> --network=<custom_network_name> -p 8081:8080 -v <watermarks_source_folder>:/app/data:z webapp```
 
 ### Load balancer
 
 ### Building the load balancer image
+To build the load balancer image run the below command
+``` podman build -t lb -f load-balancer/Dockerfile .```
+
+To run the load balancer, run the below command
+```podman run -d --name <container-name> --network=<custom_network_name> -p 8100:8100 -v <input_images_source_folder>:/app/data:z lb```
 
 ### Running the scaling controller
 
@@ -63,14 +77,18 @@ Run a variable load generator test to check validity of the entire system and ob
 - **Request Body**:
     ```json
     {
-        "policy": "round_robin" | "state_aware",
-        "image": <path-to-image>,
-        "size": "small" | "medium" | "large"
+        "data": "small" | "medium" | "large",
+        "file": "<image-name>",
+        "output": "<output-image-name>"
     }
+    ```
+    **Note**: The `file`, `data` and `output` should be sent as form fields.
     ```
 - **Response**:
     - `200 OK`: Confirms the request has been routed
-    - `400 Bad Request`: Invalid or missing parameters.
+    - `400 Bad Request`: Invalid or missing parameters or file not found.
+    - `503 Internal Server Error`: No backend found to forward the request
+    - `500 Internal Server Error`: Any other error encountered
 
 ---
 
@@ -82,7 +100,7 @@ Run a variable load generator test to check validity of the entire system and ob
     ```json
     {
         "action": "scale_up" | "scale_down",
-        "count": <number_of_containers>
+        "count": "<number_of_containers>"
     }
     ```
 - **Response**:

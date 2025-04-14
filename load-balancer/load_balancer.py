@@ -1,10 +1,11 @@
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
 import uvicorn
 import subprocess
 import logging
 import psutil
 import time
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -140,39 +141,48 @@ class LoadBalancer:
 lb = LoadBalancer()
 
 @app.post("/route")
-async def load_balancer(request: Request):
+async def load_balancer(data: str = Form(None), file: str = Form(None), output: str = Form(None)):
     try:
-        form = await request.form()
-        policy = form.get("policy", "round_robin")
-        image = form.get("image")
-        watermark_size = form.get("size")
-        
-        if not image:
-            logging.error("No image provided in the request")
-            return {"error": "Image is required"}, 400
-        
-        logging.info("Received request with policy: %s and image", policy)
+        datadict={'watermark-size': data}
+
+        if not data or not file:
+            logging.error("Missing required fields: data or file")
+            return {"error": "Both 'data' and 'file' are required"}, 400
+
+        filepath = "/app/data/" + file
+        if not Path(filepath).is_file():
+            logging.error("File does not exist: %s", file)
+            return {"error": "File not found"}, 400
+        logging.info("File exists: %s", filepath)
+        filedict = {"image": Path(filepath).open("rb")}
         
         start_time = time.time()
         backend = lb.get_backend(policy)
-        files = {"image": image.file}
-        response = requests.post(backend, data={'watermark-size': watermark_size}, files=files)
-        latency = (time.time() - start_time) * 1000
-        lb.latency_records.append(latency)
-        if len(lb.latency_records) > 100:
-            lb.latency_records.pop(0)
+        backend = BACKENDS[0]
+        if not backend:
+            lb.increment_dropped_requests()
+            return {"error": "No available backends"}, 503
+        logging.info("Selected backend: %s", backend)
+        response = requests.post(backend, data=datadict, files=filedict)
+
+        if response.status_code == 200:
+            logging.info("Request forwarded successfully")
+            if output:
+                output_path = "/app/data/" + output
+                with open(output_path, "wb") as fh:
+                    fh.write(response.content)
         
-        lb.total_requests += 1
-        lb.backend_request_count[backend] = lb.backend_request_count.get(backend, 0) + 1
+        # lb.total_requests += 1
+        # lb.backend_request_count[backend] = lb.backend_request_count.get(backend, 0) + 1
         
-        logging.info("Forwarded request to backend: %s", backend)
-        logging.info("Total requests handled: %d", lb.total_requests)
-        logging.info("Requests sent to backends: %s", lb.backend_request_count)
+        # logging.info("Forwarded request to backend: %s", backend)
+        # logging.info("Total requests handled: %d", lb.total_requests)
+        # logging.info("Requests sent to backends: %s", lb.backend_request_count)
         
         return response.content, response.status_code
     except Exception as e:
-        lb.increment_failed_requests()
-        lb.increment_dropped_requests()
+        # lb.increment_failed_requests()
+        # lb.increment_dropped_requests()
         logging.error("Failed to forward request: %s", e)
         return {"error": "Failed to forward request"}, 500
 
