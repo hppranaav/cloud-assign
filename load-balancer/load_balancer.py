@@ -20,6 +20,7 @@ app = FastAPI()
 
 BACKENDS = []
 CONTAINER_IMAGE = "webapp"
+gateway_ip = ""
 
 class LoadBalancer:
     def __init__(self):
@@ -32,14 +33,35 @@ class LoadBalancer:
         self.policy_switch_count = 0
         self.current_policy = "round_robin"
         logging.info("Initializing LoadBalancer")
+        self.get_gateway_ip()
         self.update_backends()
 
+    def get_gateway_ip(self):
+        global gateway_ip
+        try:
+            # Make use of the /proc/net/route file to find the gateway IP as we use python:slim base image
+            # and it doesn't have ip command
+            # This is a workaround to get the gateway IP address
+            # in a containerized environment
+            with open('/proc/net/route', 'r') as f:
+                for line in f.readlines():
+                    fields = line.strip().split('\t')
+                    if fields[1] == '00000000':
+                        gateway_ip = fields[2]
+                        gateway_ip = '.'.join([str(int(gateway_ip[i:i+2], 16)) for i in range(6, -2, -2)])
+                        gateway_ip = f"http://{gateway_ip}:8300/containers"
+                        logging.info(f"Gateway IP: {gateway_ip}")
+                        break
+        except Exception as e:
+            logging.error(f"Failed to get gateway IP: {e}")
+
+    
     def update_backends(self):
         global BACKENDS
         try:
             logging.info("Updating backends")
 
-            result = requests.get("http://localhost:8300/containers")
+            result = requests.get(gateway_ip)
             if result.status_code != 200:
                 logging.error(f"Failed to get container list: {result.text}")
                 return
@@ -164,11 +186,11 @@ async def load_balancer(data: str = Form(None), file: str = Form(None), output: 
         filedict = {"image": Path(filepath).open("rb")}
         
         start_time = time.time()
-        backend = lb.get_backend(policy)
+        backend = lb.get_backend(lb.current_policy)
         if not backend:
             lb.increment_dropped_requests()
             return {"error": "No available backends"}, 503
-        logging.info("Selected backend: %s", backend)
+        logging.info("Selected backend: %s", backend) # Remove this log when submitting
         response = requests.post(backend, data=datadict, files=filedict)
 
         if response.status_code == 200:
