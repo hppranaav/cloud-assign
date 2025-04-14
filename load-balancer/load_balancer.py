@@ -248,49 +248,18 @@ async def get_algo():
     return {"policy": lb.current_policy}, 200
 
 @app.get("/change")
-async def change_algo(request: Request):
+async def change_algo():
     logging.info("Changing routing policy")
-    policy = request.query_params.get("policy", "round_robin")
-    logging.info("Received request with policy: %s", policy)
     try:
-        if lb.current_policy == policy:
-            logging.info("Policy already in effect")
+        if lb.current_policy == "round_robin":
+            lb.current_policy = "state_aware"
         else:
-            lb.current_policy = policy
+            lb.current_policy = "round_robin"
         return {"policy": lb.current_policy}, 200
     except Exception as e:
         logging.error("Unable to change routing policy: %s", e)
         return {"error": "failed to change policy"}, 500
 
-
-# @app.get("/metrics")
-# async def get_metrics():
-#     logging.info("Fetching metrics for load balancer")
-#     backend_metrics = {}
-#     for backend in BACKENDS:
-#         backend_metrics[backend] = {
-#             "requests": lb.backend_request_count.get(backend, 0),
-#             "status": "healthy",
-#             "cpu_usage": container_stats.get(backend,(None, None))[0],
-#             "memory_usage": container_stats.get(backend,(None, None))[1],
-#             "error_rate": lb.calculate_error_rate(),
-#         }
-    
-#     metrics = {
-#         "total_requests": lb.total_requests,
-#         "active_connections": len(BACKENDS),
-#         "average_latency": sum(lb.latency_records) / len(lb.latency_records) if lb.latency_records else 0,
-#         "dropped_requests": lb.dropped_requests,
-#         "error_rate": lb.calculate_error_rate(),
-#         "cpu_usage": psutil.cpu_percent(),
-#         "memory_usage": psutil.virtual_memory().percent,
-#         "current_policy": lb.current_policy,
-#         "policy_switch_count": lb.policy_switch_count,
-#         "backend_metrics": backend_metrics,
-#     }
-    
-#     logging.debug("Metrics data: %s", metrics)
-#     return metrics, 200
 
 if __name__ == "__main__":
     logging.info("Starting Load Balancer")
