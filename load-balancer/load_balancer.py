@@ -37,13 +37,13 @@ class LoadBalancer:
         self.get_gateway_ip()
         self.update_backends()
 
+    # Get the gateway IP address of network
     def get_gateway_ip(self):
         global gateway_ip
         try:
-            # Make use of the /proc/net/route file to find the gateway IP as we use python:slim base image
-            # and it doesn't have ip command
+            # the /proc/net/route file is needed to find the gateway IP as we use python:slim base image
             # This is a workaround to get the gateway IP address
-            # in a containerized environment
+            # in a containerized environment without using ip route
             with open('/proc/net/route', 'r') as f:
                 for line in f.readlines():
                     fields = line.strip().split('\t')
@@ -56,6 +56,7 @@ class LoadBalancer:
         except Exception as e:
             logging.error(f"Failed to get gateway IP: {e}")
 
+    # Update the list of backends by querying the scaling controller
     def update_backends(self):
         global BACKENDS
         try:
@@ -85,6 +86,7 @@ class LoadBalancer:
         except Exception as e:
             logging.error("Failed to update backends: %s", e)
 
+    # Round robin algorithm
     def round_robin(self):
         if not BACKENDS:
             logging.warning("BACKENDS is empty, updating backends")
@@ -94,6 +96,7 @@ class LoadBalancer:
         logging.info("Selected backend (round robin): %s", backend)
         return backend
 
+    # Least response time + active connections
     def state_aware(self):
         self.update_backends()
         DEFAULT_LATENCY = 0.2
@@ -126,6 +129,7 @@ class LoadBalancer:
         logging.info("Selected backend (real-response latency-aware): %s", selected["backend"])
         return selected["backend"]
 
+    # Get the backend based on the current policy
     def get_backend(self, policy="round_robin"):
         if policy != self.current_policy:
             self.policy_switch_count += 1
@@ -133,58 +137,65 @@ class LoadBalancer:
             logging.info("Switched to load balancing policy: %s", policy)
         return self.state_aware() if policy == "state_aware" else self.round_robin()
     
+    # Increment the dropped request count
     def increment_dropped_requests(self):
         self.dropped_requests += 1
         logging.warning(f"Request dropped. Total dropped requests: {self.dropped_requests}")
 
+    # Increment the failed request count
     def increment_failed_requests(self):
         self.failed_requests += 1
         logging.warning(f"Request failed. Total failed requests: {self.failed_requests}")
 
+    # Calculate error rate
     def calculate_error_rate(self):
         if self.total_requests > 0:
             return (self.failed_requests / self.total_requests) * 100
         return 0
     
-    def get_all_container_stats(self):
-        try:
-            result = subprocess.run(
-                ["podman", "ps", "--format", "{{.Names}}"],
-                capture_output=True, text=True
-            )
+    # DEPRECATED: Get the CPU and memory usage of all containers
+    # This function is not used in the current implementation
+
+    # def get_all_container_stats(self):
+    #     try:
+    #         result = subprocess.run(
+    #             ["podman", "ps", "--format", "{{.Names}}"],
+    #             capture_output=True, text=True
+    #         )
             
-            if result.returncode != 0:
-                logging.error(f"Failed to get container list: {result.stderr}")
-                return None
+    #         if result.returncode != 0:
+    #             logging.error(f"Failed to get container list: {result.stderr}")
+    #             return None
             
-            container_names = result.stdout.strip().splitlines()
-            container_stats = {}
+    #         container_names = result.stdout.strip().splitlines()
+    #         container_stats = {}
 
-            for container_name in container_names:
-                stats_result = subprocess.run(
-                    ["podman", "stats", container_name, "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}"],
-                    capture_output=True, text=True
-                )
+    #         for container_name in container_names:
+    #             stats_result = subprocess.run(
+    #                 ["podman", "stats", container_name, "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}"],
+    #                 capture_output=True, text=True
+    #             )
 
-                if stats_result.returncode == 0:
-                    stats = stats_result.stdout.strip().split()
-                    cpu_usage = stats[0].replace('%', '')
-                    mem_usage = stats[1]
-                    container_stats[f"https://{container_name}:8080"] = (float(cpu_usage), mem_usage)
-                    logging.info(f"Container {container_name}: CPU={cpu_usage}%, MEM={mem_usage}")
-                else:
-                    logging.warning(f"Failed to get stats for container {container_name}: {stats_result.stderr}")
-                    container_stats[container_name] = (None, None)
+    #             if stats_result.returncode == 0:
+    #                 stats = stats_result.stdout.strip().split()
+    #                 cpu_usage = stats[0].replace('%', '')
+    #                 mem_usage = stats[1]
+    #                 container_stats[f"https://{container_name}:8080"] = (float(cpu_usage), mem_usage)
+    #                 logging.info(f"Container {container_name}: CPU={cpu_usage}%, MEM={mem_usage}")
+    #             else:
+    #                 logging.warning(f"Failed to get stats for container {container_name}: {stats_result.stderr}")
+    #                 container_stats[container_name] = (None, None)
 
-            return container_stats
+    #         return container_stats
 
-        except Exception as e:
-            logging.error(f"Error retrieving container stats: {e}")
-            return None
+    #     except Exception as e:
+    #         logging.error(f"Error retrieving container stats: {e}")
+    #         return None
                 
 
 lb = LoadBalancer()
 
+# Load balancer logic
 @app.post("/route")
 async def load_balancer(data: str = Form(None), file: str = Form(None), output: str = Form(None)):
     try:
@@ -241,7 +252,7 @@ async def load_balancer(data: str = Form(None), file: str = Form(None), output: 
         logging.error("Failed to forward request: %s", e)
         return {"error": "Failed to forward request"}, 500
 
-
+# 
 @app.get("/algo")
 async def get_algo():
     logging.info("Fetching current rounting protocol")
