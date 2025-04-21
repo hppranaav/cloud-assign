@@ -23,8 +23,20 @@ To build the load balancer image run the below command
 
 To run the load balancer, run the below command
 ```podman run -d --name <container-name> --network=<custom_network_name> -p 8100:8100 -v <input_images_source_folder>:/app/data:z lb```
+### podman run -d --name lb1 --network=mynet -p 8100:8100 -v /mnt/c/Users/ashto/Project/PranaavAssignment/cloud-assign/materials-assignment1/function/data/images:/app/data:z lb
 
 ### Running the scaling controller
+### cd ~
+### python3 -m venv myenv
+### source myenv/bin/activate
+### 
+### cd /mnt/c/Users/ashto/Project/PranaavAssignment/cloud-assign/scaling-controller
+### pip install fastapi uvicorn
+### python scaling_controller.py
+
+
+
+
 
 ## Architecture
 In our scenario, we have kept the load balancer and the scaling controller as seperate entities, with the load balancer running as a container on the same network as the webapp containers and the scaling controller running as a daemon.

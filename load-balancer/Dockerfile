@@ -1,4 +1,14 @@
+# FROM python:3.9-slim
 
+# WORKDIR /app
+
+# COPY . .
+
+# RUN pip install fastapi uvicorn requests
+
+# CMD ["uvicorn", "load_balancer:app", "--host", "0.0.0.0", "--port", "8100"]
+
+# OLD
 FROM python:3.9-slim
 
 WORKDIR /app
